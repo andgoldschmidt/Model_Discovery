@@ -12,6 +12,7 @@ from itertools import combinations
 
 import scipy as sci
 from scipy import interpolate, integrate
+from sklearn import clone
 
 class Derivative(abc.ABC):
     '''Object for computing numerical derivatives for use in SINDy.
@@ -206,9 +207,11 @@ class SINDy:
         # Compute Library(x)
         self.ThX = np.array([f(self.x) for f in self.library]).T
 
-        # Compute equation along each dimension of x
+        # Store each variable's results in copies of the model
+        self.res = [clone(self.model) for i in range(d)]
+
+        # Minimize loss (fit model) along each dimension of the data
         self.x_dot = np.empty((n, d))
-        self.res = []
         for i in range(d):
             # Compute derivative
             self.x_dot[:,i] = np.array(list(self.derivative.compute_for(self.t, self.x[:,i], range(n))))
@@ -219,7 +222,7 @@ class SINDy:
             # Fit model (ignore fit warnings TODO: make more honest)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                self.res.append(self.model.fit(self.ThX[allowed], self.x_dot[allowed, i]))
+                self.res[i].fit(self.ThX[allowed], self.x_dot[allowed, i])
         
         self.loaded = True 
         return self.res[0].coef_ if d == 1 else np.array([r.coef_ for r in self.res])
