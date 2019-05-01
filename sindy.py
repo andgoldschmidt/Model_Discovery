@@ -190,8 +190,34 @@ class SINDy:
         self.t_pred = None
         self.x_pred = None
         self.dim_pred = None
+
+    def sequential_thresholding(self, t, x, threshold):
+        ''' 
+            Repeatedly runs SINDy's identify function, suppressing
+            terms that fall below the provided threshold.
+
+            For the original algorithm, choose a least squares model
+            with no regularization.
+        '''
+        # for constructing a boolean array marking orignal terms kept
+        original_library = self.library
+
+        # iterate at max over all library terms
+        for count in range(len(original_library)):
+            soln = self.identify(t, x)
+            keep = np.abs(soln) > threshold
+
+            # Exit when no more terms are removable
+            if np.all(keep):
+                break
+            self.library = [self.library[j] for j,k in enumerate(keep) if k] # reduce library
+
+        return soln, [l in self.library for l in original_library]
         
     def identify(self, t, x):
+        ''' 
+            Solves the SINDy regression problem using the sklearn model provided.        
+        '''
         if self.loaded:
             self.reset()
         
@@ -205,6 +231,7 @@ class SINDy:
 
         # Compute Library(x)
         self.ThX = np.array([f(self.x) for f in self.library]).T
+        _, l = self.ThX.shape 
 
         # Compute derivative
         self.x_dot = np.empty((n, d))
@@ -224,9 +251,14 @@ class SINDy:
             self.res = self.model.fit(self.ThX[allowed], self.x_dot[allowed])
         
         self.loaded = True 
-        return self.res.coef_ 
+        return self.res.coef_.reshape(l, -1)
 
     def integrate(self, t0=None, x0=None, t_step=np.inf):
+        '''
+            Numerically integrate the learned model.
+
+            TODO: Needs tests for 2+D.
+        '''
         if not self.loaded:
             return np.array([])
 
