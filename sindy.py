@@ -12,7 +12,6 @@ from itertools import combinations
 
 import scipy as sci
 from scipy import interpolate, integrate
-from sklearn import clone
 
 class Derivative(abc.ABC):
     '''Object for computing numerical derivatives for use in SINDy.
@@ -207,25 +206,25 @@ class SINDy:
         # Compute Library(x)
         self.ThX = np.array([f(self.x) for f in self.library]).T
 
-        # Store each variable's results in copies of the model
-        self.res = [clone(self.model) for i in range(d)]
-
-        # Minimize loss (fit model) along each dimension of the data
+        # Compute derivative
         self.x_dot = np.empty((n, d))
+        allowed = np.ones(n)
         for i in range(d):
-            # Compute derivative
             self.x_dot[:,i] = np.array(list(self.derivative.compute_for(self.t, self.x[:,i], range(n))))
-
+            
             # Limit derivates to valid values
-            allowed =  np.isfinite(self.x_dot[:,i])
-    
-            # Fit model (ignore fit warnings TODO: make more honest)
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                self.res[i].fit(self.ThX[allowed], self.x_dot[allowed, i])
+            allowed *= np.isfinite(self.x_dot[:,i])
+
+        allowed = allowed.astype(bool)
+
+
+        # Fit model (ignore fit warnings TODO: make more honest)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            self.res = self.model.fit(self.ThX[allowed], self.x_dot[allowed])
         
         self.loaded = True 
-        return self.res[0].coef_ if d == 1 else np.array([r.coef_ for r in self.res])
+        return self.res.coef_ 
 
     def integrate(self, t0=None, x0=None, t_step=np.inf):
         if not self.loaded:
@@ -235,7 +234,7 @@ class SINDy:
 
         # Create the right hand side from the coefficients and library
         # Note: x will have dimensions that match scipy rk45 specs
-        rhs = lambda t, x: (np.array([r.coef_ for r in self.res]))\
+        rhs = lambda t, x: (self.res.coef_) \
                            @(np.array([f(x.reshape(-1, d)) for f in self.library]))
 
         # Load initial state
