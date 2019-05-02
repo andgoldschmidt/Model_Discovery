@@ -177,6 +177,7 @@ class SINDy:
         self.x_dot = None
         self._valid_data = None
         self.soln = None
+        self._solver = None
 
         # Dimensions
         self._n = 0
@@ -191,6 +192,7 @@ class SINDy:
         self.x_dot = None
         self._valid_data = None
         self.soln = None
+        self._solver = None
 
         # Dimensions
         self._n = 0
@@ -310,6 +312,7 @@ class SINDy:
 
         # Equation is 1'l x l'd = 1'd, flatten to d
         rhs = lambda t, x: ((np.array([f(x.reshape(1,-1)) for f in self.library]).T)@(self.soln)).flatten()
-        solver = sci.integrate.solve_ivp(rhs, [t_initial,t_final], y0=x0, t_eval=np.linspace(t_initial,t_final,t_pts))
+        self._solver = sci.integrate.solve_ivp(rhs, [t_initial,t_final], y0=x0, t_eval=np.linspace(t_initial,t_final,t_pts))
 
-        return solver.t, solver.y.T
+        # Save the solver for debugging
+        return self._solver.t, self._solver.y.T
