@@ -4,7 +4,6 @@ Created on Wed Feb 27 13:33:55 2019
 
 @author: agoldschmidt
 """
-import warnings
 import numpy as np
 import abc
 
@@ -12,6 +11,7 @@ from itertools import combinations
 
 import scipy as sci
 from scipy import interpolate, integrate
+from sklearn import clone
 
 class Derivative(abc.ABC):
     '''Object for computing numerical derivatives for use in SINDy.
@@ -159,7 +159,7 @@ class SINDy:
     '''SINDy identifies an (ideally sparse) vector S that satisfies the
     equation X' = Theta(X)*S.
     Arguments:
-        params['library']: the functions mapping in Theta(x)
+        params['library']: a list of functions making up the columns of Theta(x)
         params['derivative']: a Derivative object to compute x_dot
         params['model]: For now, the model is from sklearn and requires a \
                         fit and returns a result with a coeff_ attribute
@@ -170,119 +170,146 @@ class SINDy:
         self.model = params['model']
 
         # Results
-        self.loaded = False
+        self._loaded = False
         self.t = None
         self.x = None
         self.ThX = None
         self.x_dot = None
-        self.res = None
-        self.t_pred = None
-        self.x_pred = None
-        self.dim_pred = None
+        self._valid_data = None
+        self.soln = None
+
+        # Dimensions
+        self._n = 0
+        self._d = 0
+        self._l = 0
 
     def reset(self):
-        self.loaded = False
+        self._loaded = False
         self.t = None
         self.x = None
         self.ThX = None
         self.x_dot = None
-        self.res = None
-        self.t_pred = None
-        self.x_pred = None
-        self.dim_pred = None
+        self._valid_data = None
+        self.soln = None
 
-    def sequential_thresholding(self, t, x, threshold):
-        ''' 
-            Repeatedly runs SINDy's identify function, suppressing
-            terms that fall below the provided threshold.
+        # Dimensions
+        self._n = 0
+        self._d = 0
+        self._l = 0
 
-            For the original algorithm, choose a least squares model
-            with no regularization.
+    def _load(self, t, x):
         '''
-        # for constructing a boolean array marking orignal terms kept
-        original_library = self.library
-
-        # iterate at max over all library terms
-        for count in range(len(original_library)):
-            soln = self.identify(t, x)
-            keep = np.abs(soln) > threshold
-
-            # Exit when no more terms are removable
-            if np.all(keep):
-                break
-            self.library = [self.library[j] for j,k in enumerate(keep) if k] # reduce library
-
-        return soln, [l in self.library for l in original_library]
-        
-    def identify(self, t, x):
-        ''' 
-            Solves the SINDy regression problem using the sklearn model provided.        
+            Loads equation. Does not solve anything.
         '''
-        if self.loaded:
-            self.reset()
-        
         arg_t = np.argsort(t)
         self.t = t[arg_t]
         self.x = x[arg_t]
 
         # Reshape after sort
-        self.x = x.reshape(-1, 1) if x.ndim == 1 else x
-        n,d = self.x.shape
+        self.x = self.x.reshape(-1, 1) if self.x.ndim == 1 else self.x
+        self._n,self._d = self.x.shape
 
+        # -- LHS (n'd)
+        # Compute derivative
+        self.x_dot = np.empty((self._n,self._d))
+        for i in range(self._d):
+            self.x_dot[:,i] = np.array(list(self.derivative.compute_for(self.t, self.x[:,i], range(self._n))))
+
+        # Limit derivates to universally valid values
+        self._valid_data = np.ones(self._n)
+        for i in range(self._d):
+            self._valid_data *= np.isfinite(self.x_dot[:,i])
+        self._valid_data = self._valid_data.astype(bool)
+
+        # -- RHS
         # Compute Library(x)
         self.ThX = np.array([f(self.x) for f in self.library]).T
-        _, l = self.ThX.shape 
+        _,self._l = self.ThX.shape
 
-        # Compute derivative
-        self.x_dot = np.empty((n, d))
-        allowed = np.ones(n)
-        for i in range(d):
-            self.x_dot[:,i] = np.array(list(self.derivative.compute_for(self.t, self.x[:,i], range(n))))
-            
-            # Limit derivates to valid values
-            allowed *= np.isfinite(self.x_dot[:,i])
-
-        allowed = allowed.astype(bool)
+        self._loaded = True
 
 
-        # Fit model (ignore fit warnings TODO: make more honest)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            self.res = self.model.fit(self.ThX[allowed], self.x_dot[allowed])
+    def sequential_thresholding(self, t, x, threshold):
+        ''' 
+            Repeatedly runs SINDy's identify procedure, suppressing
+            terms that fall below the provided threshold. Returns a
+            solution of shape (l'd).
+
+            Note: For the original ST-algorithm, initialize SINDy
+            with a least squares model (no regularization).
+
+            Arguments:
+                t: times (n)
+                x: data (n'd)
+                threshold: Zero any library terms with coefficients less\
+                           than the threshold. Threshold can be universal\
+                           or vary across data dimensions (size 0 or d)
+        '''
+        if self._loaded:
+            self.reset()
+
+        self._load(t,x)
         
-        self.loaded = True 
-        return self.res.coef_.reshape(l, -1)
+        # Need a model for each dimension of the data
+        models = [clone(self.model) for i in range(self._d)]
+        active_terms = np.ones((self._l,self._d)).astype(bool)
+        self.soln = np.zeros((self._l,self._d))
+        # Allow thresholding to be separate along each dimension
+        threshold = np.array([threshold]*self._d) if np.ndim(threshold) == 0 else threshold
 
-    def integrate(self, t0=None, x0=None, t_step=np.inf):
+        for col in range(self._d):            
+            # Can remove at worst one library term per iteration
+            for count in range(len(self.library)):
+                # Rezero (replace only active terms)
+                self.soln[:, col] = 0
+
+                # All terms were removed
+                if not np.any(active_terms[:,col]):
+                    break
+
+                # Fit model along active terms for valid data (both must be true)
+                index = np.outer(self._valid_data, active_terms[:,col])
+                models[col].fit(self.ThX[index].reshape(np.sum(self._valid_data), np.sum(active_terms[:,col])),
+                                    self.x_dot[self._valid_data, col])
+                self.soln[active_terms[:,col], col] = models[col].coef_
+
+                # Next active terms must exceed the threshold
+                new_active = np.abs(self.soln[:,col]) > threshold[col]
+
+                # No change in active terms
+                if np.all(new_active == active_terms[:,col]):
+                    break
+
+                active_terms[:,col] = new_active
+
+        return self.soln
+    
+    def identify(self, t, x):
+        ''' 
+            Solves the SINDy regression problem using the sklearn model provided.
+            Returns a solution of shape (l'd).
+
+            Arguments:
+                t: times (n)
+                x: data (n'd)
         '''
-            Numerically integrate the learned model.
+        if self._loaded:
+            self.reset()
 
-            TODO: Needs tests for 2+D.
-        '''
-        if not self.loaded:
-            return np.array([])
+        self._load(t, x)
 
-        n,d = self.x.shape
+        # Fit model
+        self.model.fit(self.ThX[self._valid_data], self.x_dot[self._valid_data])
+        self.soln = self.model.coef_.reshape(self._l,self._d)
+        
+        return self.soln
 
-        # Create the right hand side from the coefficients and library
-        # Note: x will have dimensions that match scipy rk45 specs
-        rhs = lambda t, x: (self.res.coef_) \
-                           @(np.array([f(x.reshape(-1, d)) for f in self.library]))
+    def integrate(self, x0, t_initial, t_final, t_pts):
+        if not np.any(self.soln):
+            return [np.array([])]*2 # blank time, prediction
 
-        # Load initial state
-        x0 = x0 if x0 else self.x[0, :]    
-        x0 = x0 if np.ndim(x0) > 0 else [x0]
-        t0 = t0 if t0 else self.t[0]
+        # Equation is 1'l x l'd = 1'd, flatten to d
+        rhs = lambda t, x: ((np.array([f(x.reshape(1,-1)) for f in self.library]).T)@(self.soln)).flatten()
+        solver = sci.integrate.solve_ivp(rhs, [t_initial,t_final], y0=x0, t_eval=np.linspace(t_initial,t_final,t_pts))
 
-        # Integrate equation (vectorized because functions are f(t,y) for y.shape = dim,pts)
-        solver = sci.integrate.RK45(rhs, t0, x0, self.t.max(), max_step=t_step, vectorized=True)
-        self.t_pred = []
-        self.x_pred = []
-        while solver.status == 'running':
-           solver.step()
-           self.t_pred.append(solver.t)  
-           self.x_pred.append(solver.y)
-        self.t_pred = np.array(self.t_pred)
-        self.x_pred = np.array(self.x_pred)
-
-        return [self.t_pred, self.x_pred]
+        return solver.t, solver.y.T
