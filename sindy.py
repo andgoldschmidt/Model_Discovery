@@ -348,7 +348,7 @@ class SINDy:
         resid = self.x_dot - self.ThX@self.soln
         sse = np.sum(resid**2)
         k = np.sum(self.soln > 0)
-        return 2*k + 2*np.ln(sse/self._n)
+        return 2*k + 2*np.log(sse/self._n)
 
     def bic(self):
         '''
@@ -360,4 +360,4 @@ class SINDy:
         resid = self.x_dot - self.ThX@self.soln
         sse = np.sum(resid**2)
         k = np.sum(self.soln > 0)
-        return  k*np.ln(self._n) + self._n*np.ln(sse/self._n)
+        return  k*np.log(self._n) + self._n*np.log(sse/self._n)
