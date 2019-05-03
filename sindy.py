@@ -337,3 +337,27 @@ class SINDy:
 
         # Save the solver for debugging
         return self._solver.t, self._solver.y.T
+
+    def aic(self):
+        '''
+            Compute the Akaike information criterion.
+        '''
+        if not self._loaded and not np.any(self.soln):
+            return np.nan
+
+        resid = self.x_dot - self.ThX@self.soln
+        sse = np.sum(resid**2)
+        k = np.sum(self.soln > 0)
+        return 2*k + 2*np.ln(sse/self._n)
+
+    def bic(self):
+        '''
+            Compute the Bayesian information criterion.
+        '''
+        if not self._loaded and not np.any(self.soln):
+            return np.nan
+
+        resid = self.x_dot - self.ThX@self.soln
+        sse = np.sum(resid**2)
+        k = np.sum(self.soln > 0)
+        return  k*np.ln(self._n) + self._n*np.ln(sse/self._n)
