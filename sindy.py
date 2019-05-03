@@ -153,6 +153,24 @@ def multinomial_powers(n, k):
         elem = np.array([-1] + list(elem) + [n+k-1])
         yield elem[1:] - elem[:-1] - 1
 
+def create_library(order, dimension):
+    '''
+    Returns a library of functions up to 'order' that apply to variables in
+    a space of 'dimension'.
+
+    Arguments:
+        order: the order of the polynomials to consider
+        dimension: the number of terms in the input space
+    '''
+    library = []
+    names = []
+    for powers in np.array(list(multinomial_powers(order, dimension + 1))):
+        library.append(lambda x, powers=powers[:-1]: 
+                       np.product([np.power(x[:, i], p) for i, p in enumerate(powers)],
+                       axis=0))
+        names.append(powers[:-1])
+    return library, names
+
 # ---------------
 
 class SINDy:
@@ -310,9 +328,12 @@ class SINDy:
         if not np.any(self.soln):
             return [np.array([])]*2 # blank time, prediction
 
+        # interpolate or use specific points provided
+        t_pts = np.linspace(t_initial,t_final,t_pts) if np.ndim(t_pts) == 0 else t_pts
+
         # Equation is 1'l x l'd = 1'd, flatten to d
         rhs = lambda t, x: ((np.array([f(x.reshape(1,-1)) for f in self.library]).T)@(self.soln)).flatten()
-        self._solver = sci.integrate.solve_ivp(rhs, [t_initial,t_final], y0=x0, t_eval=np.linspace(t_initial,t_final,t_pts))
+        self._solver = sci.integrate.solve_ivp(rhs, [t_initial,t_final], y0=x0, t_eval=t_pts)
 
         # Save the solver for debugging
         return self._solver.t, self._solver.y.T
